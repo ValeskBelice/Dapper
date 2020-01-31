@@ -1,0 +1,197 @@
+using Dapper;
+using Laureate.Core.Domain.Contracts.Repositories.Base;
+using Laureate.Core.Infrastructure.AppSettings;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+
+namespace Laureate.Core.Infrastructure.Repositories.Base
+{
+    public class DapperBase : IDisposable, IDapperBase
+    {
+        protected readonly SqlConnection conexao;
+
+        public int TimeOut { get { return 200; } }
+
+        public DapperBase(string defaultKeyConnectionString)
+        {
+            try
+            {
+                string conn = string.Empty;
+                conn = GetAppSetting.GetConnection(defaultKeyConnectionString);
+
+                if (!string.IsNullOrEmpty(conn))
+                    conexao = new SqlConnection(conn);
+            }
+            catch (Exception)
+            {
+
+            }
+        }
+
+        public DapperBase()
+        {
+            conexao = new SqlConnection(GetAppSetting.GetConnection(DefaultKeys.LaureateCoreConnection()));
+        }
+
+
+        public void ExecuteProcedure(string name)
+        {
+            conexao.Open();
+            conexao.Execute(name, commandType: CommandType.StoredProcedure, commandTimeout: TimeOut);
+            conexao.Close();
+        }
+
+        public void ExecuteProcedure(string name, object parameters)
+        {
+            conexao.Open();
+            conexao.Execute(name, parameters, commandType: CommandType.StoredProcedure, commandTimeout: TimeOut);
+            conexao.Close();
+        }
+
+        public T ExecuteProcedureScalar<T>(string name, object parameters)
+        {
+            conexao.Open();
+            var retorno = conexao.Query<T>(name, parameters, commandType: CommandType.StoredProcedure, commandTimeout: TimeOut).FirstOrDefault();
+            conexao.Close();
+            return (T)retorno;
+        }
+
+        public IEnumerable<T> ExecuteProcedure<T>(string name)
+        {
+            conexao.Open();
+            var retorno = conexao.Query<T>(name, commandType: CommandType.StoredProcedure, commandTimeout: TimeOut);
+            conexao.Close();
+            return (IEnumerable<T>)retorno;
+        }
+
+        public IEnumerable<T> ExecuteProcedure<T>(string name, object parameters)
+        {
+
+            conexao.Open();
+            var retorno = conexao.Query<T>(name, parameters, commandType: CommandType.StoredProcedure, commandTimeout: TimeOut);
+            conexao.Close();
+            return (List<T>)retorno;
+        }
+
+        public void Dispose()
+        {
+            conexao.Dispose();
+        }
+
+
+        public IEnumerable<T> GetAll<T>(string tableName)
+        {
+            conexao.Open();
+            var retorno = conexao.Query<T>(string.Format("select * from {0} where ativo = 1", tableName), commandTimeout: TimeOut);
+            conexao.Close();
+            return (IEnumerable<T>)retorno;
+
+        }
+        public IEnumerable<T> GetExecuteQuery<T>(string query)
+        {
+            conexao.Open();
+            var retorno = conexao.Query<T>(query, commandTimeout: TimeOut);
+            conexao.Close();
+            return (IEnumerable<T>)retorno;
+
+        }
+        public IEnumerable<T> Get<T>(string tableName, object parameters)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendFormat("select * from {0}", tableName);
+            var fisrtItem = parameters.GetType().GetProperties().FirstOrDefault();
+            foreach (PropertyInfo item in parameters.GetType().GetProperties())
+            {
+                var value = AjustaValor((item.GetValue(parameters, null).GetType()).Name == "String" ? "'" + item.GetValue(parameters, null) + "'" : item.GetValue(parameters, null));
+                sb.AppendFormat(" {0} {1} = {2}", (item == fisrtItem ? "WHERE" : "AND"), item.Name, value);
+                //sb.AppendFormat(" AND Ativo=1");
+            }
+
+            conexao.Open();
+            var retorno = conexao.Query<T>(sb.ToString(), commandTimeout: TimeOut);
+            conexao.Close();
+
+            return (IEnumerable<T>)retorno;
+        }
+
+
+        public IEnumerable<T> Get<T>(object parameters)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendFormat("select * from {0}", typeof(T).Name);
+            var fisrtItem = parameters.GetType().GetProperties().FirstOrDefault();
+            foreach (PropertyInfo item in parameters.GetType().GetProperties())
+            {
+                //var value = (item.GetValue(parameters, null).GetType()).Name == "String" ? "'" + item.GetValue(parameters, null) + "'" : item.GetValue(parameters, null);
+                var value = AjustaValor((item.GetValue(parameters, null).GetType()).Name == "String" ? "'" + item.GetValue(parameters, null) + "'" : item.GetValue(parameters, null));
+                sb.AppendFormat(" {0} {1} = {2}", (item == fisrtItem ? "WHERE" : "AND"), item.Name, value);
+                //sb.AppendFormat(" AND Ativo=1");
+            }
+            conexao.Open();
+            var retorno = conexao.Query<T>(sb.ToString(), commandTimeout: TimeOut);
+            conexao.Close();
+            return (IEnumerable<T>)retorno;
+        }
+
+        public IEnumerable<T> ExecuteSelect<T>(string Command)
+        {
+
+            conexao.Open();
+            var retorno = conexao.Query<T>(Command, commandType: CommandType.Text, commandTimeout: TimeOut, buffered: false);
+            conexao.Close();
+            return (IEnumerable<T>)retorno.ToList();
+        }
+        public IEnumerable<T> ExecuteSelectWithDependency<T>(string Command, OnChangeEventHandler Onchange)
+        {
+
+            conexao.Open();
+            var retorno = conexao.Query<T>(Command, commandType: CommandType.Text, commandTimeout: TimeOut, buffered: false);
+
+
+            var command = new SqlCommand(Command);
+            command.Connection = conexao;
+            var dependencia = new SqlDependency(command);
+            dependencia.OnChange += Onchange;
+
+
+            using (SqlDataReader reader = command.ExecuteReader()) { }
+            conexao.Close();
+
+
+            return (IEnumerable<T>)retorno.ToList();
+        }
+
+        private object AjustaValor(object valor)
+        {
+
+
+            if (valor.GetType().Name == "Boolean")
+            {
+                if (valor.ToString() == "False")
+                    return "0";
+                else
+                    if (valor.ToString() == "True")
+                    return "1";
+
+            }
+
+            return valor;
+        }
+
+
+
+        public IEnumerable<T> Query<T>(string query)
+        {
+            conexao.Open();
+            var retorno = conexao.Query<T>(query, commandTimeout: TimeOut);
+            conexao.Close();
+            return retorno;
+        }
+
+    }
+}
